@@ -11,6 +11,7 @@ Integrantes:
 #include <string.h>
 #include <sys/types.h>
 #include <signal.h>
+#include <ctype.h>
 
 void prompt()
 {
@@ -35,6 +36,28 @@ void prompt()
         // Reset color to default
         printf("\033[0m");
     }
+}
+
+char *trim_whitespace(char *str)
+{
+    char *end;
+
+    // Trim leading space
+    while (isspace((unsigned char)*str))
+        str++;
+
+    if (*str == 0) // All spaces?
+        return str;
+
+    // Trim trailing space
+    end = str + strlen(str) - 1;
+    while (end > str && isspace((unsigned char)*end))
+        end--;
+
+    // Write new null terminator character
+    end[1] = '\0';
+
+    return str;
 }
 
 void read_shell_input()
@@ -73,7 +96,8 @@ char **tokenize_entry(char *entry)
     {
         if (curr_str[0] != '\0')
         {
-            tokens[token_count] = curr_str;
+            char *trimmed_token = trim_whitespace(curr_str);
+            tokens[token_count] = trimmed_token;
             token_count++;
             curr_str = strsep(&token_ptr, delim);
         }
@@ -139,6 +163,71 @@ void execute_binary(const char *binary_name)
     }
 }
 
+void execute_cd(char **tokens)
+{
+    // We already checked that it was a cd command.
+
+    int token_count = 0;
+
+    // If there is only one arg.(tokens[0] and nothing else) It is an error.
+
+    for (int i = 0; tokens[i] != NULL; i++)
+    {
+        token_count++;
+    }
+    if ((token_count < 2) | (token_count > 2))
+    {
+        fprintf(stderr, "An error has ocurred\n");
+    }
+    else
+    {
+        int result = chdir(tokens[1]);
+        if (result == -1)
+        {
+            fprintf(stderr, "An error ocurred\n");
+        }
+    }
+
+    printf("Amount of cd args: %i\n", token_count);
+
+    // Otherwise call chdir() syscall.
+}
+
+void change_path() {}
+
+void built_in_cmd(char **tokens)
+{
+
+    char *cmd_name = tokens[0];
+
+    if (cmd_name != NULL)
+    {
+        // Check exit, cd, path.
+        int is_exit = strcmp(cmd_name, "exit");
+        int is_cd = strcmp(cmd_name, "cd");
+        int is_path = strcmp(cmd_name, "path");
+
+        printf("Comparison to exit: %i\n", is_exit);
+        if (is_exit == 0)
+        {
+            exit(0);
+        }
+
+        printf("Comparison to cd: %i\n", is_cd);
+        if (is_cd == 0)
+        {
+            printf("Executing cd");
+            execute_cd(tokens);
+        }
+
+        printf("Comparison to path: %i\n", is_path);
+        if (is_path == 0)
+        {
+            change_path();
+        }
+    }
+}
+
 int main(int argc, char *argv[])
 {
     // The shell was called with more than one file
@@ -169,9 +258,17 @@ int main(int argc, char *argv[])
         // TEMPORAL: Lee e imprime en pantalla el array de los tokens. Luego libera la memoria correspondiente a este.
         if (tokens != NULL)
         {
+
+            built_in_cmd(tokens);
+
             for (int i = 0; tokens[i] != NULL; i++)
             {
                 printf("Token %d: %s\n", i, tokens[i]);
+
+                for (int j = 0; j < strlen(tokens[i]) + 1; j++)
+                { // +1 to include null terminator
+                    printf("Char %d: '%c' (ASCII: %d)\n", j, tokens[i][j], tokens[i][j]);
+                }
             }
             free(tokens);
         }
