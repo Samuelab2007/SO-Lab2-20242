@@ -10,8 +10,11 @@ Integrantes:
 #include <errno.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <signal.h>
 #include <ctype.h>
+
+char error_message[30] = "An error has occurred\n";
 
 void prompt()
 {
@@ -105,7 +108,7 @@ char **tokenize_entry(char *entry)
 
     return tokens;
 }
-void execute_binary(const char *binary_name)
+void execute_binary(char **tokens)
 {
 
     pid_t pid = fork();
@@ -128,6 +131,8 @@ void execute_binary(const char *binary_name)
         // Primero se verifica en las dos carpetas donde podrían estar los binarios
 
         char pathname[256];
+        const char *binary_name = tokens[0];
+
         strcpy(pathname, PATHS[0]);
         strcat(pathname, binary_name);
 
@@ -139,28 +144,65 @@ void execute_binary(const char *binary_name)
 
         if (can_access == 0)
         {
-            char *args[] = {pathname, "-l", NULL};
-            int code = execv(args[0], args);
+            int arg_count = 0;
+            while (tokens[arg_count] != NULL)
+            {
+                arg_count++;
+            }
+
+            // Allocate memory for args array
+            char **args = malloc((arg_count + 1) * sizeof(char *));
+
+            // Pass the contens of **tokens to args.
+            for (int i = 0; i < arg_count; i++)
+            {
+                args[i] = tokens[i];
+            }
+            args[arg_count] = NULL; // Null terminate the args array
+
+            // char *args[] = {pathname, "-l", NULL};
+
+            // Signature: int execv(const char *pathname, char *const argv[]);
+
+            /* The char *const argv[] argument is an array of pointers to null-terminated strings
+            that represent the argument list available to the new progam.
+            / The first argument, by convention, should point to the filename associated with the file being executed
+            / They array of pointers must be terminated by a null pointer.*/
+            int cmd_success = execv(pathname, args);
+
+            free(args);
+            if (cmd_success == -1)
+            {
+                exit(0);
+            }
         }
         else
         {
-            printf("no se pudo encontrar el binario a ejecutar o no se tienen permisos de ejecución");
+            write(STDERR_FILENO, error_message, strlen(error_message));
         }
     }
-    printf("Started child process with PID: %d\n", pid);
 
     // Sleep father 1 second, to execute the command.
-    sleep(1);
 
-    // Los children solo se les puede mandar kill() y señales desde fuera. En este caso desde el father process
-    if (kill(pid, SIGTERM) == 0)
+    // Wait for the child process to finish.
+    int status;
+    if (waitpid(pid, &status, 0) == -1)
     {
-        printf("Sent sigterm to child process %d\n", pid);
+        perror("waitpid failed\n");
     }
-    else
+
+    // Excerpt to print messages about how the child process exited.
+    /*else
     {
-        perror("Failed to send SIGTERM");
-    }
+        if (WIFEXITED(status))
+        {
+            printf("Child process exited with status: %d\n", WEXITSTATUS(status));
+        }
+        else if (WIFSIGNALED(status))
+        {
+            printf("Child process was terminated by signal: %d\n", WTERMSIG(status));
+        }
+    }*/
 }
 
 void execute_cd(char **tokens)
@@ -177,25 +219,49 @@ void execute_cd(char **tokens)
     }
     if ((token_count < 2) | (token_count > 2))
     {
-        fprintf(stderr, "An error has ocurred\n");
+        write(STDERR_FILENO, error_message, strlen(error_message));
+        exit(0);
     }
     else
     {
         int result = chdir(tokens[1]);
         if (result == -1)
         {
-            fprintf(stderr, "An error ocurred\n");
+            write(STDERR_FILENO, error_message, strlen(error_message));
+            exit(0);
         }
     }
-
-    printf("Amount of cd args: %i\n", token_count);
 
     // Otherwise call chdir() syscall.
 }
 
 void change_path() {}
 
-void built_in_cmd(char **tokens)
+int get_token_count(char **tokens)
+{
+    int length = 0;
+
+    while (tokens[length] != NULL)
+    {
+        length++;
+    }
+
+    return length;
+}
+
+void execute_exit(char **tokens)
+{
+    int token_count = get_token_count(tokens);
+
+    if (token_count > 1)
+    {
+        write(STDERR_FILENO, error_message, strlen(error_message));
+    }
+    exit(0);
+}
+
+// Checks for built-in commands. If none is found, returns -1.
+int built_in_cmd(char **tokens)
 {
 
     char *cmd_name = tokens[0];
@@ -207,76 +273,105 @@ void built_in_cmd(char **tokens)
         int is_cd = strcmp(cmd_name, "cd");
         int is_path = strcmp(cmd_name, "path");
 
-        printf("Comparison to exit: %i\n", is_exit);
         if (is_exit == 0)
         {
-            exit(0);
+            execute_exit(tokens);
         }
-
-        printf("Comparison to cd: %i\n", is_cd);
-        if (is_cd == 0)
+        else if (is_cd == 0)
         {
-            printf("Executing cd");
             execute_cd(tokens);
         }
-
-        printf("Comparison to path: %i\n", is_path);
-        if (is_path == 0)
+        else if (is_path == 0)
         {
+            write(STDIN_FILENO, "Executing path(not implemented)", strlen("Executing path(not implemented)"));
             change_path();
         }
+        else
+        {
+            return -1;
+        }
     }
+    return 0;
 }
 
 int main(int argc, char *argv[])
 {
+
+    int batch_mode = 0;
     // The shell was called with more than one file
     if (argc > 2)
     {
         exit(1);
     }
 
+    if (argc == 2)
+    {
+        batch_mode = 1;
+    }
+
     while (1)
     {
-
-        // 1. Display del prompt.
-        prompt();
-
-        // Se lee la entrada de la terminal.
-        // read_shell_input();
-
-        // Si muevo esto a la función read_shell_input() me da un segfault xd
+        // Define un buffer para leer los comandos de entrada(sea por tty o por batch).
         char *buffer;
         size_t buffer_size = 1024;
-        getline(&buffer, &buffer_size, stdin);
-
-        // buffer es donde queda guardado lo que se lee de la línea
-
-        // 2. Tokenizar el comando ingresado en el shell.
-        char **tokens = tokenize_entry(buffer);
-
-        // TEMPORAL: Lee e imprime en pantalla el array de los tokens. Luego libera la memoria correspondiente a este.
-        if (tokens != NULL)
+        // 1. Display del prompt. Batch mode desactivado.
+        if (batch_mode == 0)
         {
+            prompt();
 
-            built_in_cmd(tokens);
+            // Se lee la entrada de la terminal.
+            // read_shell_input();
+            // Si muevo esto a la función read_shell_input() me da un segfault xd
+            getline(&buffer, &buffer_size, stdin);
 
-            for (int i = 0; tokens[i] != NULL; i++)
+            // 2. Tokenizar el comando ingresado en el shell.
+            char **tokens = tokenize_entry(buffer);
+
+            // 3. Ejecuta lo que lee por la entrada.
+            if (tokens != NULL)
             {
-                printf("Token %d: %s\n", i, tokens[i]);
 
-                for (int j = 0; j < strlen(tokens[i]) + 1; j++)
-                { // +1 to include null terminator
-                    printf("Char %d: '%c' (ASCII: %d)\n", j, tokens[i][j], tokens[i][j]);
+                // Check for built-in commands.
+                int found_builtin = built_in_cmd(tokens);
+
+                if (found_builtin == -1)
+                {
+                    execute_binary(tokens);
+                }
+
+                free(tokens);
+            }
+        }
+        // Batch mode. Lo mismo pero leyendo desde un archivo de entrada. El cual es pasado por argv[1]
+        if (batch_mode == 1)
+        {
+            FILE *batch_fd = fopen(argv[1], "r");
+
+            if (batch_fd == NULL)
+            {
+                write(STDERR_FILENO, error_message, strlen(error_message));
+                exit(1);
+            }
+            else
+            {
+                while (getline(&buffer, &buffer_size, batch_fd) != -1)
+                {
+                    char **tokens = tokenize_entry(buffer);
+                    if (tokens != NULL)
+                    {
+                        int found_builtin = built_in_cmd(tokens);
+
+                        if (found_builtin == -1)
+                        {
+                            execute_binary(tokens);
+                        }
+
+                        free(tokens);
+                    }
                 }
             }
-            free(tokens);
+            fclose(batch_fd);
+            return 0;
         }
-
-        //  Mientras se pueda leer un token
-
-        /* 3. Si el programa no es de los que tenemos que hacer la implementación propia. Lo ejecuto con execute_binary(), que
-        también checkea su acceso.*/
-        // execute_binary("ls");
     }
 }
