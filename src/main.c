@@ -13,8 +13,29 @@ Integrantes:
 #include <sys/wait.h>
 #include <signal.h>
 #include <ctype.h>
+#include <stdbool.h>
 
-char error_message[30] = "An error has occurred\n";
+#define MAX_PATHS 100
+
+const char error_message[30] = "An error has occurred\n";
+
+// Hay que utilizar la variable PATH
+
+char *PATHS[MAX_PATHS];
+
+char *PATHS[] = {"/bin/", "/usr/bin/", NULL};
+int path_count = 3;
+
+// Flag para indicar si hay que redirigir el comando, o si ya se encontró un ">"
+int redirection = false;
+
+void show_path()
+{
+    for (int i = 0; i < path_count; i++)
+    {
+        printf("Path: %s\n", PATHS[i]);
+    }
+}
 
 void prompt()
 {
@@ -63,12 +84,16 @@ char *trim_whitespace(char *str)
     return str;
 }
 
-void read_shell_input()
+int get_token_count(char **tokens)
 {
-    // Intento para leer una línea.
-    char *buffer;
-    size_t buffer_size = 1024;
-    getline(&buffer, &buffer_size, stdin);
+    int length = 0;
+
+    while (tokens[length] != NULL)
+    {
+        length++;
+    }
+
+    return length;
 }
 
 // Tokenize the parameters of the shell, returns an array with token pointers.
@@ -84,7 +109,7 @@ char **tokenize_entry(char *entry)
     const char delim[3] = " ";
 
     // Array para guardar los punteros de los tokens.
-    char **tokens = malloc(10 * sizeof(char *));
+    char **tokens = malloc(50 * sizeof(char *));
     int token_count = 0;
 
     snprintf(token_buffer, sizeof(token_buffer), "%s", entry);
@@ -94,12 +119,33 @@ char **tokenize_entry(char *entry)
     // Llama strsep para tokenizar, guarda en curr_str el token obtenido
     curr_str = strsep(&token_ptr, delim);
 
+    curr_str = trim_whitespace(curr_str);
+
     // Lo realiza en bucle y guarda en el array.
     while (curr_str != NULL)
     {
         if (curr_str[0] != '\0')
         {
             char *trimmed_token = trim_whitespace(curr_str);
+
+            char is_redirection_token = strcmp(trimmed_token, ">");
+            if (is_redirection_token == 0)
+            {
+
+                // No me detecta cuando el simbolo ingresado es ">>"
+                // write(STDOUT_FILENO, "Se encontro una redireccion", strlen("Se encontro una redireccion"));
+
+                if (redirection)
+                {
+                    write(STDERR_FILENO, error_message, strlen(error_message));
+                    exit(0);
+                }
+                else
+                {
+                    redirection = true;
+                }
+            }
+
             tokens[token_count] = trimmed_token;
             token_count++;
             curr_str = strsep(&token_ptr, delim);
@@ -110,6 +156,40 @@ char **tokenize_entry(char *entry)
 }
 void execute_binary(char **tokens)
 {
+
+    /* Si hay una redirección, el símbolo ">" sería el antepenúltimo en los tokens.
+    Ya que sería. token(n-2): ">", token(n-1): "output_file" token(n): NULL.
+    Por lo que para verificar que no hayan varios archivos de salida, vamos a verificar que el antepenultimo token
+    si cumpla esta condición. También sirve para verificar que si haya seteado un archivo de salida.
+    */
+
+    int token_count = get_token_count(tokens);
+    int index_penultimo_token = token_count - 2;
+
+    char *output_file = tokens[token_count - 1];
+    if (redirection)
+    {
+        int comparacion_penultimo_token = strcmp(tokens[index_penultimo_token], ">");
+
+        // Me está comparando esto sin ningún sendido. parece que lo hace aun cuando no hubo una redirección
+        if (comparacion_penultimo_token != 0)
+        {
+            write(STDERR_FILENO, error_message, strlen(error_message));
+            exit(0);
+        }
+
+        // Subset del array de tokens
+        // char **tokens_subset = malloc((token_count - 2) * sizeof(char *));
+
+        // La parte de comandos de la entrada es hasta el token inmediatamente anterior a ">".
+        for (int i = 0; i < index_penultimo_token; i++)
+        {
+            tokens[i] = tokens[i];
+        }
+        // Añade la terminación en NULL. Para no alterar las siguientes funciones.
+        tokens[index_penultimo_token] = NULL;
+        // Haciendo esto busco sólo pasar a execv la parte ejecutable del comando. Y el resto es hacia donde redirijo
+    }
 
     pid_t pid = fork();
     // Primero se hace fork() a la consola. Y luego hacemos exec() en el proceso hijo
@@ -122,12 +202,6 @@ void execute_binary(char **tokens)
     }
     else if (pid == 0)
     {
-
-        // Hay que utilizar la variable PATH
-        const char *PATHS[] = {"/bin/", "/usr/bin/", NULL};
-
-        // También se deben pasar argumentos a la función
-
         // Primero se verifica en las dos carpetas donde podrían estar los binarios
 
         char pathname[256];
@@ -142,8 +216,21 @@ void execute_binary(char **tokens)
 
         int can_access = access(pathname, X_OK);
 
+        // El archivo se puede ejecutar.
         if (can_access == 0)
         {
+            if (redirection)
+            {
+                FILE *fd_redirection = fopen(output_file, "w");
+
+                int fileno_output = fileno(fd_redirection);
+
+                // Asocia la salida y error estándar con el fd del archivo de redirección.
+                dup2(fileno_output, STDERR_FILENO);
+                dup2(fileno_output, STDOUT_FILENO);
+                fclose(fd_redirection);
+            }
+
             int arg_count = 0;
             while (tokens[arg_count] != NULL)
             {
@@ -160,14 +247,6 @@ void execute_binary(char **tokens)
             }
             args[arg_count] = NULL; // Null terminate the args array
 
-            // char *args[] = {pathname, "-l", NULL};
-
-            // Signature: int execv(const char *pathname, char *const argv[]);
-
-            /* The char *const argv[] argument is an array of pointers to null-terminated strings
-            that represent the argument list available to the new progam.
-            / The first argument, by convention, should point to the filename associated with the file being executed
-            / They array of pointers must be terminated by a null pointer.*/
             int cmd_success = execv(pathname, args);
 
             free(args);
@@ -182,14 +261,9 @@ void execute_binary(char **tokens)
         }
     }
 
-    // Sleep father 1 second, to execute the command.
-
     // Wait for the child process to finish.
     int status;
-    if (waitpid(pid, &status, 0) == -1)
-    {
-        perror("waitpid failed\n");
-    }
+    waitpid(pid, &status, 0); // If waitpid is -1 an error occurred
 
     // Excerpt to print messages about how the child process exited.
     /*else
@@ -235,18 +309,29 @@ void execute_cd(char **tokens)
     // Otherwise call chdir() syscall.
 }
 
-void change_path() {}
-
-int get_token_count(char **tokens)
+// TODO: CORREGIR DESPUÉS
+void change_path(char **tokens)
 {
-    int length = 0;
 
-    while (tokens[length] != NULL)
+    int token_count = get_token_count(tokens);
+    // printf("Token count: %i", token_count);
+
+    for (int i = 0; i < path_count; i++)
     {
-        length++;
+        PATHS[i] = "\0";
     }
 
-    return length;
+    show_path();
+
+    int path_index = 0;
+
+    // Redefine PATHS variable.
+    for (int j = 1; j < token_count + 1; j++)
+    {
+        PATHS[path_index] = tokens[j];
+        path_index++;
+    }
+    show_path();
 }
 
 void execute_exit(char **tokens)
@@ -283,8 +368,7 @@ int built_in_cmd(char **tokens)
         }
         else if (is_path == 0)
         {
-            write(STDIN_FILENO, "Executing path(not implemented)", strlen("Executing path(not implemented)"));
-            change_path();
+            change_path(tokens);
         }
         else
         {
@@ -314,14 +398,13 @@ int main(int argc, char *argv[])
         // Define un buffer para leer los comandos de entrada(sea por tty o por batch).
         char *buffer;
         size_t buffer_size = 1024;
+        redirection = false;
         // 1. Display del prompt. Batch mode desactivado.
         if (batch_mode == 0)
         {
             prompt();
 
             // Se lee la entrada de la terminal.
-            // read_shell_input();
-            // Si muevo esto a la función read_shell_input() me da un segfault xd
             getline(&buffer, &buffer_size, stdin);
 
             // 2. Tokenizar el comando ingresado en el shell.
