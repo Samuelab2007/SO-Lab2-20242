@@ -123,15 +123,14 @@ char **tokenize_entry(char *entry)
 
     // Lo realiza en bucle y guarda en el array.
     while (curr_str != NULL)
-    {
+    {   
         if (curr_str[0] != '\0')
         {
             char *trimmed_token = trim_whitespace(curr_str);
+            //char is_redirection_token = strcmp(trimmed_token, ">");
 
-            char is_redirection_token = strcmp(trimmed_token, ">");
-            if (is_redirection_token == 0)
+            if (strcmp(trimmed_token, ">") == 0)
             {
-
                 // No me detecta cuando el simbolo ingresado es ">>"
                 // write(STDOUT_FILENO, "Se encontro una redireccion", strlen("Se encontro una redireccion"));
 
@@ -139,13 +138,17 @@ char **tokenize_entry(char *entry)
                 {
                     write(STDERR_FILENO, error_message, strlen(error_message));
                     exit(0);
-                }
-                else
-                {
+                } else {
                     redirection = true;
                 }
-            }
-
+                
+            } else if (strcmp(trimmed_token, ">>") == 0)
+                {
+                    write(STDOUT_FILENO, "Se encontro una redireccion", strlen("Se encontro una redireccion"));  
+                    exit(1)
+                }
+                redirection = false;
+                
             tokens[token_count] = trimmed_token;
             token_count++;
             curr_str = strsep(&token_ptr, delim);
@@ -154,6 +157,7 @@ char **tokenize_entry(char *entry)
 
     return tokens;
 }
+
 void execute_binary(char **tokens)
 {
 
@@ -172,7 +176,9 @@ void execute_binary(char **tokens)
         int comparacion_penultimo_token = strcmp(tokens[index_penultimo_token], ">");
 
         // Me está comparando esto sin ningún sendido. parece que lo hace aun cuando no hubo una redirección
-        if (comparacion_penultimo_token != 0)
+        // Si la compraración se hace cuando no hay una redirección, los dos caracteres no son iguales, 
+        // si es el caso de redirección, la comparación estaría en 0
+        if (comparacion_penultimo_token == 0) // == en vez de !=
         {
             write(STDERR_FILENO, error_message, strlen(error_message));
             exit(0);
@@ -211,6 +217,17 @@ void execute_binary(char **tokens)
         strcat(pathname, binary_name);
 
         // Si no se tiene acceso a estas, se manda error.
+
+        if (access(pathname, R_OK) =! 0)
+        {
+            write(STDERR_FILENO, error_message, strlen(error_message));
+        }
+
+        if (access(binary_name, R_OK) =! 0)
+        {
+            write(STDERR_FILENO, error_message, strlen(error_message));
+        }
+        
 
         // Si se puede acceder a alguna de ellas. Se ejecuta
 
@@ -263,20 +280,24 @@ void execute_binary(char **tokens)
 
     // Wait for the child process to finish.
     int status;
-    waitpid(pid, &status, 0); // If waitpid is -1 an error occurred
+    pid_t salida = waitpid(pid, &status, 0); // If waitpid is -1 an error occurred
 
-    // Excerpt to print messages about how the child process exited.
-    /*else
+    // If waitpid is -1 an error ocurred
+    if (salida == -1)
     {
-        if (WIFEXITED(status))
-        {
-            printf("Child process exited with status: %d\n", WEXITSTATUS(status));
-        }
-        else if (WIFSIGNALED(status))
-        {
-            printf("Child process was terminated by signal: %d\n", WTERMSIG(status));
-        }
-    }*/
+        write(STDERR_FILENO, error_message, strlen(error_message));
+    }
+
+    // Except to print messages about how the child process exited.
+    if (WIFEXITED(status))
+    {
+        printf("Child process exited with status: %d\n", WEXITSTATUS(status));
+    }
+    else if (WIFSIGNALED(status))
+    {
+        printf("Child process was terminated by signal: %d\n", WTERMSIG(status));
+    }
+    
 }
 
 void execute_cd(char **tokens)
@@ -302,7 +323,7 @@ void execute_cd(char **tokens)
         if (result == -1)
         {
             write(STDERR_FILENO, error_message, strlen(error_message));
-            exit(0);
+            exit(1);
         }
     }
 
