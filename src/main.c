@@ -165,14 +165,19 @@ void execute_binary(char **tokens)
 
     int token_count = get_token_count(tokens);
     int index_penultimo_token = token_count - 2;
-
+    bool has_command = (index_penultimo_token != 0);
     char *output_file = tokens[token_count - 1];
     if (redirection)
     {
-        int comparacion_penultimo_token = strcmp(tokens[index_penultimo_token], ">");
-
-        // Me está comparando esto sin ningún sendido. parece que lo hace aun cuando no hubo una redirección
-        if (comparacion_penultimo_token != 0)
+        int penultimo_separator_check = strcmp(tokens[index_penultimo_token], ">");
+        /*
+        printf("Penultimo token: %s", tokens[index_penultimo_token]);
+        printf("Comparacion >: %i", penultimo_separator_check);
+        printf("Has command: %i\n", has_command);
+        printf("if condition: %i", ((penultimo_separator_check != 0) && (!has_command)));
+        */
+        // Me está comparando esto sin ningún sentido. parece que lo hace aun cuando no hubo una redirección
+        if ((penultimo_separator_check != 0) || (!has_command))
         {
             write(STDERR_FILENO, error_message, strlen(error_message));
             exit(0);
@@ -321,7 +326,7 @@ void change_path(char **tokens)
         PATHS[i] = "\0";
     }
 
-    show_path();
+    // show_path();
 
     int path_index = 0;
 
@@ -331,7 +336,7 @@ void change_path(char **tokens)
         PATHS[path_index] = tokens[j];
         path_index++;
     }
-    show_path();
+    // show_path();
 }
 
 void execute_exit(char **tokens)
@@ -385,9 +390,9 @@ int main(int argc, char *argv[])
     // The shell was called with more than one file
     if (argc > 2)
     {
+        write(STDERR_FILENO, error_message, strlen(error_message));
         exit(1);
     }
-
     if (argc == 2)
     {
         batch_mode = 1;
