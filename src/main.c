@@ -24,7 +24,7 @@ const char error_message[30] = "An error has occurred\n";
 char *PATHS[MAX_PATHS];
 
 char *PATHS[] = {"/bin/", "/usr/bin/", NULL};
-int path_count = 3;
+int path_count = 0;
 
 // Flag para indicar si hay que redirigir el comando, o si ya se encontró un ">"
 int redirection = false;
@@ -338,20 +338,24 @@ void change_path(char **tokens)
     // printf("Token count: %i", token_count);
 
     for (int i = 0; i < path_count; i++)
-    {
-        PATHS[i] = "\0";
+    {   
+        free(PATHS[i]);
+        PATHS[i] = NULL;
     }
+
+    path_count = 0;
 
     show_path();
 
-    int path_index = 0;
-
     // Redefine PATHS variable.
-    for (int j = 1; j < token_count + 1; j++)
+    for (int j = 1; j < token_count; j++)
     {
-        PATHS[path_index] = tokens[j];
-        path_index++;
+        if (path_count < MAX_PATHS){
+            PATHS[path_count] = strdup(tokens[j]);
+            path_count++;
+        }
     }
+
     show_path();
 }
 
