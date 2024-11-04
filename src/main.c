@@ -29,6 +29,10 @@ int path_count = 3;
 // Flag para indicar si hay que redirigir el comando, o si ya se encontró un ">"
 int redirection = false;
 
+// Flag para indicar si la ultima linea leída estaba vacía.
+// Propenso a simplificar esta lógica con los continue y eso
+bool last_line_was_empty = false;
+
 void show_path()
 {
     for (int i = 0; i < path_count; i++)
@@ -99,7 +103,6 @@ int get_token_count(char **tokens)
 // Tokenize the parameters of the shell, returns an array with token pointers.
 char **tokenize_entry(char *entry)
 {
-
     // token_buffer es el token inicial
     static char token_buffer[1024];
 
@@ -116,11 +119,12 @@ char **tokenize_entry(char *entry)
     // Define token_ptr como el puntero hacia el token inicial
     char *token_ptr = token_buffer;
 
+    token_ptr = trim_whitespace(token_ptr);
+
     // Llama strsep para tokenizar, guarda en curr_str el token obtenido
     curr_str = strsep(&token_ptr, delim);
 
     curr_str = trim_whitespace(curr_str);
-
     // Lo realiza en bucle y guarda en el array.
     while (curr_str != NULL)
     {
@@ -150,6 +154,12 @@ char **tokenize_entry(char *entry)
             token_count++;
             curr_str = strsep(&token_ptr, delim);
         }
+        // La entrada es una linea en blanco
+        else
+        {
+            last_line_was_empty = true;
+            break;
+        }
     }
 
     return tokens;
@@ -163,10 +173,16 @@ void execute_binary(char **tokens)
     si cumpla esta condición. También sirve para verificar que si haya seteado un archivo de salida.
     */
 
+    // Iterate through the tokens.
+
     int token_count = get_token_count(tokens);
+
     int index_penultimo_token = token_count - 2;
+
     bool has_command = (index_penultimo_token != 0);
+
     char *output_file = tokens[token_count - 1];
+
     if (redirection)
     {
         int penultimo_separator_check = strcmp(tokens[index_penultimo_token], ">");
@@ -221,20 +237,38 @@ void execute_binary(char **tokens)
 
         int can_access = access(pathname, X_OK);
 
+        FILE *fd_redirection;
+
+        if (redirection)
+        {
+            fd_redirection = fopen(output_file, "w");
+            if (fd_redirection == NULL)
+            {
+                perror("Failed to open output file");
+                exit(EXIT_FAILURE);
+            }
+
+            int fileno_output = fileno(fd_redirection);
+            if (fileno_output < 0)
+            {
+                perror("Failed to get file descriptor");
+            }
+
+            // Asocia la salida y error estándar con el fd del archivo de redirección.
+            if (dup2(fileno_output, STDOUT_FILENO) < 0)
+            {
+                write(STDERR_FILENO, error_message, strlen(error_message));
+            }
+
+            if (dup2(fileno_output, STDERR_FILENO) < 0)
+            {
+                write(STDERR_FILENO, error_message, strlen(error_message));
+            }
+        }
+
         // El archivo se puede ejecutar.
         if (can_access == 0)
         {
-            if (redirection)
-            {
-                FILE *fd_redirection = fopen(output_file, "w");
-
-                int fileno_output = fileno(fd_redirection);
-
-                // Asocia la salida y error estándar con el fd del archivo de redirección.
-                dup2(fileno_output, STDERR_FILENO);
-                dup2(fileno_output, STDOUT_FILENO);
-                fclose(fd_redirection);
-            }
 
             int arg_count = 0;
             while (tokens[arg_count] != NULL)
@@ -264,6 +298,7 @@ void execute_binary(char **tokens)
         {
             write(STDERR_FILENO, error_message, strlen(error_message));
         }
+        fclose(fd_redirection);
     }
 
     // Wait for the child process to finish.
@@ -387,6 +422,7 @@ int main(int argc, char *argv[])
 {
 
     int batch_mode = 0;
+    last_line_was_empty = false;
     // The shell was called with more than one file
     if (argc > 2)
     {
@@ -412,13 +448,20 @@ int main(int argc, char *argv[])
             // Se lee la entrada de la terminal.
             getline(&buffer, &buffer_size, stdin);
 
-            // 2. Tokenizar el comando ingresado en el shell.
+            //  2. Tokenizar el comando ingresado en el shell.
             char **tokens = tokenize_entry(buffer);
 
-            // 3. Ejecuta lo que lee por la entrada.
+            // Si la ultima linea estaba vacía, reinicia el loop y continua funcionando.
+            if (last_line_was_empty)
+            {
+                last_line_was_empty = false;
+                continue;
+            }
+
+            // printf("Tokens first value: %s", tokens[0]);
+            //  3. Ejecuta lo que lee por la entrada.
             if (tokens != NULL)
             {
-
                 // Check for built-in commands.
                 int found_builtin = built_in_cmd(tokens);
 
@@ -433,6 +476,7 @@ int main(int argc, char *argv[])
         // Batch mode. Lo mismo pero leyendo desde un archivo de entrada. El cual es pasado por argv[1]
         if (batch_mode == 1)
         {
+
             FILE *batch_fd = fopen(argv[1], "r");
 
             if (batch_fd == NULL)
@@ -444,7 +488,16 @@ int main(int argc, char *argv[])
             {
                 while (getline(&buffer, &buffer_size, batch_fd) != -1)
                 {
+                    redirection = false;
                     char **tokens = tokenize_entry(buffer);
+
+                    // Checkea, si la ultima linea estaba vacía. Se la salta y continua leyendo el batch file.
+                    if (last_line_was_empty)
+                    {
+                        last_line_was_empty = false;
+                        continue;
+                    }
+
                     if (tokens != NULL)
                     {
                         int found_builtin = built_in_cmd(tokens);
