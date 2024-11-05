@@ -15,19 +15,16 @@ Integrantes:
 #include <ctype.h>
 #include <stdbool.h>
 
-#define MAX_PATHS 100
-
 const char error_message[30] = "An error has occurred\n";
 
 // Hay que utilizar la variable PATH
 
-char *PATHS[MAX_PATHS];
+char *path[10] = {"/bin/", NULL};
 
-char *PATHS[] = {"/bin/", "/usr/bin/", NULL};
-int path_count = 3;
+int path_count = 2;
 
 // Flag para indicar si hay que redirigir el comando, o si ya se encontró un ">"
-int redirection = false;
+bool redirection = false;
 
 // Flag para indicar si la ultima linea leída estaba vacía.
 // Propenso a simplificar esta lógica con los continue y eso
@@ -37,7 +34,19 @@ void show_path()
 {
     for (int i = 0; i < path_count; i++)
     {
-        printf("Path: %s\n", PATHS[i]);
+        printf("Path[%i]: %s\n", i, path[i]);
+    }
+}
+
+void print_commands(char **commands)
+{
+
+    int i = 0;
+
+    while (commands[i] != NULL)
+    {
+        printf("Tokens[%i]: %s\n", i, commands[i]);
+        i++;
     }
 }
 
@@ -100,6 +109,43 @@ int get_token_count(char **tokens)
     return length;
 }
 
+char **find_parallel_commands(char *entry)
+{
+    static char token_buffer[1024];
+    char *curr_str = NULL;
+    const char separator[3] = "&";
+    char **commands = malloc(50 * sizeof(char *));
+    int parallel_count = 0;
+
+    snprintf(token_buffer, sizeof(token_buffer), "%s", entry);
+
+    char *token_ptr = token_buffer;
+    token_ptr = trim_whitespace(token_ptr);
+
+    curr_str = strsep(&token_ptr, separator);
+
+    curr_str = trim_whitespace(curr_str);
+
+    while (curr_str != NULL)
+    {
+        if (curr_str[0] != '\0')
+        {
+            char *trimmed_command = trim_whitespace(curr_str);
+
+            commands[parallel_count] = trimmed_command;
+            parallel_count++;
+
+            curr_str = strsep(&token_ptr, separator);
+        }
+        else
+        {
+            last_line_was_empty = true;
+            break;
+        }
+    }
+    return commands;
+}
+
 // Tokenize the parameters of the shell, returns an array with token pointers.
 char **tokenize_entry(char *entry)
 {
@@ -132,12 +178,11 @@ char **tokenize_entry(char *entry)
         {
             char *trimmed_token = trim_whitespace(curr_str);
 
-            char is_redirection_token = strcmp(trimmed_token, ">");
+            // Compara para verificar los tokens especiales utilizados para indicar redirección y procesos paralelos
+            int is_redirection_token = strcmp(trimmed_token, ">");
+
             if (is_redirection_token == 0)
             {
-
-                // No me detecta cuando el simbolo ingresado es ">>"
-                // write(STDOUT_FILENO, "Se encontro una redireccion", strlen("Se encontro una redireccion"));
 
                 if (redirection)
                 {
@@ -172,9 +217,6 @@ void execute_binary(char **tokens)
     Por lo que para verificar que no hayan varios archivos de salida, vamos a verificar que el antepenultimo token
     si cumpla esta condición. También sirve para verificar que si haya seteado un archivo de salida.
     */
-
-    // Iterate through the tokens.
-
     int token_count = get_token_count(tokens);
 
     int index_penultimo_token = token_count - 2;
@@ -182,27 +224,15 @@ void execute_binary(char **tokens)
     bool has_command = (index_penultimo_token != 0);
 
     char *output_file = tokens[token_count - 1];
-
     if (redirection)
     {
         int penultimo_separator_check = strcmp(tokens[index_penultimo_token], ">");
-        /*
-        printf("Penultimo token: %s", tokens[index_penultimo_token]);
-        printf("Comparacion >: %i", penultimo_separator_check);
-        printf("Has command: %i\n", has_command);
-        printf("if condition: %i", ((penultimo_separator_check != 0) && (!has_command)));
-        */
-        // Me está comparando esto sin ningún sentido. parece que lo hace aun cuando no hubo una redirección
         if ((penultimo_separator_check != 0) || (!has_command))
         {
             write(STDERR_FILENO, error_message, strlen(error_message));
             exit(0);
         }
 
-        // Subset del array de tokens
-        // char **tokens_subset = malloc((token_count - 2) * sizeof(char *));
-
-        // La parte de comandos de la entrada es hasta el token inmediatamente anterior a ">".
         for (int i = 0; i < index_penultimo_token; i++)
         {
             tokens[i] = tokens[i];
@@ -212,9 +242,9 @@ void execute_binary(char **tokens)
         // Haciendo esto busco sólo pasar a execv la parte ejecutable del comando. Y el resto es hacia donde redirijo
     }
 
+    // Acá se crean tantos procesos hijos como sean necesarios(uno por comando)
     pid_t pid = fork();
     // Primero se hace fork() a la consola. Y luego hacemos exec() en el proceso hijo
-    // TODO: Hay que verificar que el comportamiento de los children no tengan problemas
     if (pid < 0)
     {
         // Fork failed
@@ -228,13 +258,12 @@ void execute_binary(char **tokens)
         char pathname[256];
         const char *binary_name = tokens[0];
 
-        strcpy(pathname, PATHS[0]);
+        strcpy(pathname, path[0]);
         strcat(pathname, binary_name);
 
         // Si no se tiene acceso a estas, se manda error.
 
         // Si se puede acceder a alguna de ellas. Se ejecuta
-
         int can_access = access(pathname, X_OK);
 
         FILE *fd_redirection;
@@ -321,7 +350,6 @@ void execute_binary(char **tokens)
 
 void execute_cd(char **tokens)
 {
-    // We already checked that it was a cd command.
 
     int token_count = 0;
 
@@ -345,8 +373,6 @@ void execute_cd(char **tokens)
             exit(0);
         }
     }
-
-    // Otherwise call chdir() syscall.
 }
 
 // TODO: CORREGIR DESPUÉS
@@ -356,20 +382,13 @@ void change_path(char **tokens)
     int token_count = get_token_count(tokens);
     // printf("Token count: %i", token_count);
 
-    for (int i = 0; i < path_count; i++)
-    {
-        PATHS[i] = "\0";
-    }
-
     // show_path();
 
-    int path_index = 0;
-
-    // Redefine PATHS variable.
-    for (int j = 1; j < token_count + 1; j++)
+    // Redefine path variable.
+    for (int j = 0; j < token_count; j++)
     {
-        PATHS[path_index] = tokens[j];
-        path_index++;
+        // printf("TOken asignado como path: %s\n", tokens[j + 1]);
+        path[j] = tokens[j + 1];
     }
     // show_path();
 }
@@ -443,14 +462,35 @@ int main(int argc, char *argv[])
         // 1. Display del prompt. Batch mode desactivado.
         if (batch_mode == 0)
         {
+            char **tokens;
             prompt();
 
             // Se lee la entrada de la terminal.
             getline(&buffer, &buffer_size, stdin);
 
-            //  2. Tokenizar el comando ingresado en el shell.
-            char **tokens = tokenize_entry(buffer);
+            // Separo los distintos subcomandos de la entrada y luego realizo la tokenización de cada comando para ejecutarlo
+            char **commands = find_parallel_commands(buffer);
 
+            // print_commands(commands);
+
+            // Aquí me encargo de separar los distintos comandos aún más
+            for (int i = 0; commands[i] != NULL; i++)
+            {
+                tokens = tokenize_entry(commands[i]);
+                // print_commands(tokens);
+                //   3. Ejecuta lo que lee por la entrada.
+                if (tokens != NULL)
+                {
+                    // Check for built-in commands.
+                    int found_builtin = built_in_cmd(tokens);
+
+                    if (found_builtin == -1)
+                    {
+                        execute_binary(tokens);
+                    }
+                }
+            }
+            free(tokens);
             // Si la ultima linea estaba vacía, reinicia el loop y continua funcionando.
             if (last_line_was_empty)
             {
@@ -459,19 +499,6 @@ int main(int argc, char *argv[])
             }
 
             // printf("Tokens first value: %s", tokens[0]);
-            //  3. Ejecuta lo que lee por la entrada.
-            if (tokens != NULL)
-            {
-                // Check for built-in commands.
-                int found_builtin = built_in_cmd(tokens);
-
-                if (found_builtin == -1)
-                {
-                    execute_binary(tokens);
-                }
-
-                free(tokens);
-            }
         }
         // Batch mode. Lo mismo pero leyendo desde un archivo de entrada. El cual es pasado por argv[1]
         if (batch_mode == 1)
@@ -488,26 +515,35 @@ int main(int argc, char *argv[])
             {
                 while (getline(&buffer, &buffer_size, batch_fd) != -1)
                 {
+                    char **tokens;
                     redirection = false;
-                    char **tokens = tokenize_entry(buffer);
+                    // Separo los distintos subcomandos de la entrada y luego realizo la tokenización de cada comando para ejecutarlo
+                    char **commands = find_parallel_commands(buffer);
+
+                    // Aquí me encargo de separar los distintos comandos aún más
+                    for (int i = 0; commands[i] != NULL; i++)
+                    {
+                        tokens = tokenize_entry(commands[i]);
+                        // print_commands(tokens);
+                        //   3. Ejecuta lo que lee por la entrada.
+                        if (tokens != NULL)
+                        {
+                            // Check for built-in commands.
+                            int found_builtin = built_in_cmd(tokens);
+
+                            if (found_builtin == -1)
+                            {
+                                execute_binary(tokens);
+                            }
+                        }
+                    }
+                    free(tokens);
 
                     // Checkea, si la ultima linea estaba vacía. Se la salta y continua leyendo el batch file.
                     if (last_line_was_empty)
                     {
                         last_line_was_empty = false;
                         continue;
-                    }
-
-                    if (tokens != NULL)
-                    {
-                        int found_builtin = built_in_cmd(tokens);
-
-                        if (found_builtin == -1)
-                        {
-                            execute_binary(tokens);
-                        }
-
-                        free(tokens);
                     }
                 }
             }
